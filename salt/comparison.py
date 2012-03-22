@@ -145,7 +145,7 @@ class Parser(Comparator):
     <Primitive> ::= Int
                  |  String
     '''
-    def __init__(self, inpt):
+    def parse(self, inpt):
         t = Tokenizer(inpt)
         t.add_rule(r'[A-Za-z0-9]+', t.token)
         t.add_rule(r'\b(?:grains|salt|pillar)\[[^\]]+\]', t.token)
