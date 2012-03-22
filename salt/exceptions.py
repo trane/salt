@@ -64,3 +64,9 @@ class PkgParseError(SaltException):
     the CLI tool (pacman, yum, apt, aptitude, etc)
     '''
     pass
+
+class SSHInvalidKey(SaltException):
+    '''
+    Used when an invalid ssh key is used with the ssh module
+    '''
+    pass

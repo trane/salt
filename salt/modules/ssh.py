@@ -1,9 +1,10 @@
-'''
+j'''
 Manage client ssh components
 '''
 
 import os
 import re
+from salt.exceptions import SSHInvalidKey
 
 
 def _refine_enc(enc):
@@ -39,6 +40,8 @@ def _format_auth_line(
     '''
     Properly format user input.
     '''
+    if len(key.split()) > 1:
+        raise SSHInvalidKey('SSH key contains spaces')
     line = ''
     if options:
         line += '{0} '.format(','.join(options))
@@ -143,7 +146,7 @@ def _validate_keys(key_file):
                 continue
 
             # get "{options} key"
-            ln = re.search(linere, line)
+            ln = linere(line)
             if not ln:
                 # not an auth ssh key, perhaps a blank line
                 continue
