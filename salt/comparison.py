@@ -7,7 +7,7 @@ class Comparator(object):
         self.env = env
 
 
-class Rule(Comparator):
+class Rule(object):
     '''
     Rules are used by the Matcher to determine if prefix matches
     '''
@@ -22,7 +22,7 @@ class Rule(Comparator):
         else:
             return False
 
-class Matcher(Comparator):
+class Matcher(object):
     def __init__(self, rules = []):
         self.rules = rules
 
@@ -57,12 +57,17 @@ class Matcher(Comparator):
 
         return winner
 
-class Tokenizer(Comparator):
+class Tokenizer(object):
     '''
     This is a Tokenizer without need for Tokens, just provides the basic
     lexical needs of skip, peek, next and eat.
     '''
-    def __init__(self, inpt = ''):
+    def __init__(self):
+        self.next_token = None
+        self.next_text = None
+        self.matcher = Matcher()
+
+    def set_input(self, inpt = ''):
         self.inpt = inpt
         self.matcher = Matcher()
         self.next_token = None
@@ -88,10 +93,10 @@ class Tokenizer(Comparator):
         if self.next_token:
             return self.next_token
 
-        while (self.next_token == None) and (self.inpt != ""):
+        while (self.next_token == None) and (self.inpt != ''):
             winner = self.matcher.winner(self.inpt)
             if not winner:
-                return "No rule matching {0}".format(self.inpt)
+                raise ValueError("No rule matching {0}".format(self.inpt))
             winner['rule'].action(winner['prefix'])
 
         return self.next_token
@@ -111,16 +116,17 @@ class Tokenizer(Comparator):
         Consumes text without returning it, throwing an error if incorrect
         syntax
         '''
-        self.next()
+        c = self.next()
         if self.next_text != text:
-            return "Parse error: expected {0}, got {1}".format(text, self.next_text)
+            raise ValueError("Parse error: expected {0}, got {1}".format(text,
+                self.next_text))
 
     def add_rule(self, regex, action):
         self.matcher.add_rule(regex, action)
 
 
 
-class Parser(Comparator):
+class Parser(object):
     '''
     Parser will parse expressions passed in -X with the following grammar:
 
@@ -135,8 +141,8 @@ class Parser(Comparator):
                  |  '<'
                  |  '>='
                  |  '<='
-                 |  '&&'
-                 |  '||'
+                 |  'and'
+                 |  'or'
                  |  '=='
                  |  '=~'
     <Grain>     ::= grains[<String>]
@@ -145,14 +151,22 @@ class Parser(Comparator):
     <Primitive> ::= Int
                  |  String
     '''
-    def parse(self, inpt):
-        t = Tokenizer(inpt)
+    def __init__(self):
+        t = Tokenizer()
         t.add_rule(r'[A-Za-z0-9]+', t.token)
         t.add_rule(r'\b(?:grains|salt|pillar)\[[^\]]+\]', t.token)
-        t.add_rule(r'[()]', t.token)
-        t.add_rule(r'>=?|<=?|&&|\|\|', t.token)
-        t.add_rule(r'[ \n\t\r]', t.skip)
+        t.add_rule(r'[()\']', t.token)
+        t.add_rule(r'>=?|<=?|and|or|==', t.token)
+        t.add_rule(r'[ \n\t\r]+', t.skip)
         self.t = t
+
+    def parse(self, inpt):
+        self.t.set_input(inpt)
+        return self.parse_exp()
+
+    def eval_tree(self, tree):
+        if tree['op'] == '>':
+            return tree
 
     def parse_exp(self):
         term = self.parse_term()
@@ -163,45 +177,28 @@ class Parser(Comparator):
             return term
 
         # <Term> <Symbol> <Exp>
-        if symbol == '>':
-            self.t.eat(symbol)
-            s = self.parse_exp()
-            print "{0} {1} {2}".format(term,symbol,s)
-            return term > self.parse_exp()
-        elif symbol == '<':
-            self.t.eat(symbol)
-            return term < self.parse_exp()
-        elif symbol == '>=':
-            self.t.eat(symbol)
-            return term >= self.parse_exp()
-        elif symbol == '<=':
-            self.t.eat(symbol)
-            return term <= self.parse_exp()
-        elif symbol == '&&':
-            self.t.eat(symbol)
-            return term and self.parse_exp()
-        elif symbol == '||':
-            self.t.eat(symbol)
-            return term or self.parse_exp()
-        elif symbol == '==':
-            self.t.eat(symbol)
-            return term or self.parse_exp()
-        elif symbol == '=~':
-            self.t.eat(symbol)
-            return term or self.parse_exp()
-        else:
-            return "Undefined symbol {0}".format(symbol)
+        return eval("{0} {1} {2}".format(term, symbol, self.parse_exp()))
 
     def parse_term(self):
-        if self.t.peek() == '(':
-            self.t.eat('(')
+        c = self.t.peek()
+        if c == '(':
+            self.t.eat(c)
             exp = self.parse_exp()
             self.t.eat(')')
             return exp
+        if c in ["'", '"']:
+            self.t.eat(c)
+            exp = self.parse_primitive()
+            self.t.eat(c)
+            return "'{0}'".format(exp)
         return self.parse_factor()
 
     def parse_symbol(self):
-        return self.t.next()
+        symbol = self.t.peek()
+        if symbol not in ['>', '<', '>=', '<=', '==', 'and', 'or', '=~']:
+            return None
+        self.t.eat(symbol)
+        return symbol
 
     def parse_factor(self):
         factor = self.t.next()
