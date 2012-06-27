@@ -1,6 +1,7 @@
 '''
-Service Management
-==================
+Starting or restarting of services and daemons.
+===============================================
+
 Services are defined as system daemons typically started with system init or
 rc scripts, services can be defined as running or dead.
 
@@ -10,6 +11,7 @@ rc scripts, services can be defined as running or dead.
       service:
         - running
 '''
+
 
 def __virtual__():
     '''
@@ -79,6 +81,11 @@ def _enable(name, started):
             return ret
 
     # Service needs to be enabled
+    if __opts__['test']:
+        ret['result'] = None
+        ret['comment'] = 'Service {0} set to be enabled'.format(name)
+        return ret
+
     if __salt__['service.enable'](name):
         # Service has been enabled
         if started is True:
@@ -158,6 +165,11 @@ def _disable(name, started):
             return ret
 
     # Service needs to be disabled
+    if __opts__['test']:
+        ret['result'] = None
+        ret['comment'] = 'Service {0} set to be disabled'.format(name)
+        return ret
+
     if __salt__['service.disable'](name):
         # Service has been disabled
         if started is True:
@@ -223,6 +235,11 @@ def running(name, enable=None, sig=None):
         else:
             return ret
 
+    if __opts__['test']:
+        ret['result'] = None
+        ret['comment'] = 'Service {0} is set to start'.format(name)
+        return ret
+
     changes = {name: __salt__['service.start'](name)}
 
     if not changes[name]:
@@ -270,6 +287,10 @@ def dead(name, enable=None, sig=None):
             return _disable(name, None)
         else:
             return ret
+    if __opts__['test']:
+        ret['result'] = None
+        ret['comment'] = 'Service {0} is set to be killed'.format(name)
+        return ret
 
     changes = {name: __salt__['service.stop'](name)}
 
@@ -317,7 +338,7 @@ def disabled(name):
     return _disable(name, None)
 
 
-def mod_watch(name, sig=None):
+def mod_watch(name, sig=None, reload=False):
     '''
     The service watcher, called to invoke the watch command.
 
@@ -328,7 +349,10 @@ def mod_watch(name, sig=None):
         The string to search for when looking for the service process with ps
     '''
     if __salt__['service.status'](name, sig):
-        changes = {name: __salt__['service.restart'](name)}
+        if 'service.reload' in __salt__ and reload:
+            changes = {name: __salt__['service.reload'](name)}
+        else:
+            changes = {name: __salt__['service.restart'](name)}
         return {'name': name,
                 'changes': changes,
                 'result': True,

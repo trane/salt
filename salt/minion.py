@@ -14,11 +14,11 @@ import threading
 import time
 import traceback
 
-# Import zeromq libs
+# Import third party libs
 import zmq
 
 # Import salt libs
-from salt.exceptions import AuthenticationError, MinionError, \
+from salt.exceptions import AuthenticationError, \
     CommandExecutionError, CommandNotFoundError, SaltInvocationError, \
     SaltClientError
 import salt.client
@@ -26,6 +26,8 @@ import salt.crypt
 import salt.loader
 import salt.utils
 import salt.payload
+from salt._compat import string_types
+from salt.utils.debug import enable_sigusr1_handler
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +55,37 @@ def get_proc_dir(cachedir):
     return fn_
 
 
+def detect_kwargs(func, args, data=None):
+    '''
+    Detect the args and kwargs that need to be passed to a function call
+    '''
+    spec_args, _, has_kwargs, defaults = salt.state._getargs(func)
+    defaults = [] if defaults is None else defaults
+    starti = len(spec_args) - len(defaults)
+    kwarg_spec = set()
+    for ind in range(len(defaults)):
+        kwarg_spec.add(spec_args[starti])
+        starti += 1
+    _args = []
+    kwargs = {}
+    for arg in args:
+        if isinstance(arg, string_types):
+            if '=' in arg:
+                comps = arg.split('=')
+                if has_kwargs:
+                    kwargs[comps[0]] = '='.join(comps[1:])
+                    continue
+                if comps[0] in kwarg_spec:
+                    kwargs[comps[0]] = '='.join(comps[1:])
+                    continue
+        _args.append(arg)
+    if has_kwargs and isinstance(data, dict):
+        # this function accepts kwargs, pack in the publish data
+        for key, val in data.items():
+            kwargs['__pub_{0}'.format(key)] = val
+    return _args, kwargs
+
+
 class SMinion(object):
     '''
     Create an object that has loaded all of the minion module functions,
@@ -69,12 +102,19 @@ class SMinion(object):
         '''
         Load all of the modules for the minion
         '''
+        self.opts['pillar'] = salt.pillar.get_pillar(
+                self.opts,
+                self.opts['grains'],
+                self.opts['id'],
+                self.opts['environment'],
+                ).compile_pillar()
         self.functions = salt.loader.minion_mods(self.opts)
         self.returners = salt.loader.returners(self.opts)
         self.states = salt.loader.states(self.opts, self.functions)
         self.rend = salt.loader.render(self.opts, self.functions)
         self.matcher = Matcher(self.opts, self.functions)
         self.functions['sys.reload_modules'] = self.gen_modules
+
 
 class Minion(object):
     '''
@@ -91,7 +131,7 @@ class Minion(object):
         self.functions, self.returners = self.__load_modules()
         self.matcher = Matcher(self.opts, self.functions)
         self.proc_dir = get_proc_dir(opts['cachedir'])
-        if hasattr(self,'_syndic') and self._syndic:
+        if hasattr(self, '_syndic') and self._syndic:
             log.warn('Starting the Salt Syndic Minion')
         else:
             log.warn('Starting the Salt Minion')
@@ -187,7 +227,7 @@ class Minion(object):
         Override this method if you wish to handle the decoded data
         differently.
         '''
-        if isinstance(data['fun'], basestring):
+        if isinstance(data['fun'], string_types):
             if data['fun'] == 'sys.reload_modules':
                 self.functions, self.returners = self.__load_modules()
 
@@ -226,18 +266,18 @@ class Minion(object):
                 arg = eval(data['arg'][ind])
                 if isinstance(arg, bool):
                     data['arg'][ind] = str(data['arg'][ind])
-                elif isinstance(arg, (dict, int, list, basestring)):
+                elif isinstance(arg, (dict, int, list, string_types)):
                     data['arg'][ind] = arg
                 else:
                     data['arg'][ind] = str(data['arg'][ind])
-            except:
+            except Exception:
                 pass
 
         function_name = data['fun']
         if function_name in self.functions:
             try:
                 func = self.functions[data['fun']]
-                args, kw = salt.state.build_args(func, data['arg'], data)
+                args, kw = detect_kwargs(func, data['arg'], data)
                 ret['return'] = func(*args, **kw)
             except CommandNotFoundError as exc:
                 msg = 'Command required for \'{0}\' not found: {1}'
@@ -287,16 +327,16 @@ class Minion(object):
                     arg = eval(data['arg'][ind][index])
                     if isinstance(arg, bool):
                         data['arg'][ind][index] = str(data['arg'][ind][index])
-                    elif isinstance(arg, (dict, int, list, basestring)):
+                    elif isinstance(arg, (dict, int, list, string_types)):
                         data['arg'][ind][index] = arg
                     else:
                         data['arg'][ind][index] = str(data['arg'][ind][index])
-                except:
+                except Exception:
                     pass
 
             try:
                 func = self.functions[data['fun'][ind]]
-                args, kw = salt.state.build_args(func, data['arg'][ind], data)
+                args, kw = detect_kwargs(func, data['arg'][ind], data)
                 ret['return'][data['fun'][ind]] = func(*args, **kw)
             except Exception as exc:
                 trb = traceback.format_exc()
@@ -328,7 +368,11 @@ class Minion(object):
         if self.opts['multiprocessing']:
             fn_ = os.path.join(self.proc_dir, ret['jid'])
             if os.path.isfile(fn_):
-                os.remove(fn_)
+                try:
+                    os.remove(fn_)
+                except (OSError, IOError):
+                    # The file is gone already
+                    pass
         log.info('Returning information for job: {0}'.format(ret['jid']))
         context = zmq.Context()
         socket = context.socket(zmq.REQ)
@@ -351,7 +395,7 @@ class Minion(object):
         try:
             if hasattr(self.functions[ret['fun']], '__outputter__'):
                 oput = self.functions[ret['fun']].__outputter__
-                if isinstance(oput, basestring):
+                if isinstance(oput, string_types):
                     load['out'] = oput
         except KeyError:
             pass
@@ -359,7 +403,7 @@ class Minion(object):
         data = self.serial.dumps(payload)
         socket.send(data)
         ret_val = self.serial.loads(socket.recv())
-        if isinstance(ret_val, basestring) and not ret_val:
+        if isinstance(ret_val, string_types) and not ret_val:
             # The master AES key has changed, reauth
             self.authenticate()
             payload['load'] = self.crypticle.dumps(load)
@@ -431,19 +475,25 @@ class Minion(object):
         Lock onto the publisher. This is the main event loop for the minion
         '''
         context = zmq.Context()
+        poller = zmq.Poller()
         socket = context.socket(zmq.SUB)
         socket.setsockopt(zmq.SUBSCRIBE, '')
+        if self.opts['sub_timeout']:
+            socket.setsockopt(zmq.IDENTITY, self.opts['id'])
         socket.connect(self.master_pub)
+        poller.register(socket, zmq.POLLIN)
+
+        # Make sure to gracefully handle SIGUSR1
+        enable_sigusr1_handler()
+
         if self.opts['sub_timeout']:
             last = time.time()
             while True:
-                payload = None
-                try:
-                    payload = self.serial.loads(socket.recv(1))
+                socks = dict(poller.poll(self.opts['sub_timeout']))
+                if socket in socks and socks[socket] == zmq.POLLIN:
+                    payload = self.serial.loads(socket.recv())
                     self._handle_payload(payload)
                     last = time.time()
-                except:
-                    pass
                 if time.time() - last > self.opts['sub_timeout']:
                     # It has been a while since the last command, make sure
                     # the connection is fresh by reconnecting
@@ -455,22 +505,24 @@ class Minion(object):
                         except SaltClientError:
                             # Failed to update the dns, keep the old addr
                             pass
+                    poller.unregister(socket)
                     socket.close()
                     socket = context.socket(zmq.SUB)
                     socket.setsockopt(zmq.SUBSCRIBE, '')
+                    socket.setsockopt(zmq.IDENTITY, self.opts['id'])
                     socket.connect(self.master_pub)
+                    poller.register(socket, zmq.POLLIN)
                     last = time.time()
                 time.sleep(0.05)
                 multiprocessing.active_children()
                 self.passive_refresh()
         else:
             while True:
-                payload = None
-                try:
-                    payload = self.serial(socket.recv(1))
+                socks = dict(poller.poll(60))
+                if socket in socks and socks[socket] == zmq.POLLIN:
+                    payload = self.serial.loads(socket.recv())
                     self._handle_payload(payload)
-                except:
-                    pass
+                    last = time.time()
                 time.sleep(0.05)
                 multiprocessing.active_children()
                 self.passive_refresh()
@@ -572,6 +624,10 @@ class Matcher(object):
         data matches this minion
         '''
         matcher = 'glob'
+        if not data:
+            log.error('Recived bad data when setting the match from the top '
+                      'file')
+            return False
         for item in data:
             if isinstance(item, dict):
                 if 'match' in item:
@@ -602,6 +658,8 @@ class Matcher(object):
         '''
         Determines if this host is on the list
         '''
+        if isinstance(tgt, string_types):
+            tgt = tgt.split(',')
         return bool(self.opts['id'] in tgt)
 
     def grain_match(self, tgt):
@@ -618,12 +676,12 @@ class Matcher(object):
         if isinstance(self.opts['grains'][comps[0]], list):
             # We are matching a single component to a single list member
             for member in self.opts['grains'][comps[0]]:
-                if fnmatch.fnmatch(str(member), comps[1]):
+                if fnmatch.fnmatch(str(member).lower(), comps[1].lower()):
                     return True
             return False
         return bool(fnmatch.fnmatch(
-            str(self.opts['grains'][comps[0]]),
-            comps[1],
+            str(self.opts['grains'][comps[0]]).lower(),
+            comps[1].lower(),
             ))
 
     def grain_pcre_match(self, tgt):
@@ -640,10 +698,15 @@ class Matcher(object):
         if isinstance(self.opts['grains'][comps[0]], list):
             # We are matching a single component to a single list member
             for member in self.opts['grains'][comps[0]]:
-                if re.match(comps[1], str(member)):
+                if re.match(comps[1].lower(), str(member).lower()):
                     return True
             return False
-        return bool(re.match(comps[1], str(self.opts['grains'][comps[0]])))
+        return bool(
+                re.match(
+                    comps[1].lower(),
+                    str(self.opts['grains'][comps[0]]).lower()
+                    )
+                )
 
     def exsel_match(self, tgt):
         '''
@@ -653,23 +716,47 @@ class Matcher(object):
             return False
         return(self.functions[tgt]())
 
+    def pillar_match(self, tgt):
+        '''
+        Reads in the pillar glob match
+        '''
+        log.debug('tgt {0}'.format(tgt))
+        comps = tgt.split(':')
+        if len(comps) < 2:
+            log.error('Got insufficient arguments for pillar match statement from master')
+            return False
+        if comps[0] not in self.opts['pillar']:
+            log.error('Got unknown pillar match statement from master: {0}'.format(comps[0]))
+            return False
+        if isinstance(self.opts['pillar'][comps[0]], list):
+            # We are matching a single component to a single list member
+            for member in self.opts['pillar'][comps[0]]:
+                if fnmatch.fnmatch(str(member).lower(), comps[1].lower()):
+                    return True
+            return False
+        return bool(fnmatch.fnmatch(
+            str(self.opts['pillar'][comps[0]]).lower(),
+            comps[1].lower(),
+            ))
+
     def compound_match(self, tgt):
         '''
         Runs the compound target check
         '''
-        if not isinstance(tgt, basestring):
+        if not isinstance(tgt, string_types):
             log.debug('Compound target received that is not a string')
             return False
         ref = {'G': 'grain',
                'P': 'grain_pcre',
                'X': 'exsel',
+               'I': 'pillar',
                'L': 'list',
                'E': 'pcre'}
         results = []
         opers = ['and', 'or', 'not']
         for match in tgt.split():
             # Try to match tokens from the compound target, first by using
-            # the 'G, X, L, E' matcher types, then by hostname glob.
+            # the 'G, X, I, L, E' matcher types, then by hostname glob.
             if '@' in match and match[1] == '@':
                 comps = match.split('@')
                 matcher = ref.get(comps[0])

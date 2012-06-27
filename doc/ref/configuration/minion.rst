@@ -37,7 +37,7 @@ The hostname or ipv4 of the master.
 Default: ``4506``
 
 The port of the master ret server, this needs to coincide with the ret_port
-option on the salt master.
+option on the Salt master.
 
 .. code-block:: yaml
 
@@ -46,7 +46,7 @@ option on the salt master.
 .. conf_minion:: user
 
 ``user``
-----------------
+--------
 
 Default: ``root``
 
@@ -72,14 +72,14 @@ The directory used to store the minion's public and private keys.
 .. conf_minion:: id
 
 ``id``
-------------
+------
 
 Default: hostname (as returned by the Python call: ``socket.getfqdn()``)
 
 Explicitly declare the id for this minion to use, if left commented the id
-will be the hostname as returned by the python call: socket.getfqdn()
-Since salt uses detached ids it is possible to run multiple minions on the
-same machine but with different ids, this can be useful for salt compute
+will be the hostname as returned by the Python call: ``socket.getfqdn()``
+Since Salt uses detached ids it is possible to run multiple minions on the
+same machine but with different ids, this can be useful for Salt compute
 clusters.
 
 .. code-block:: yaml
@@ -186,7 +186,7 @@ If certain returners should be disabled, this is the place
 
 Default: ``[]``
 
-A list of extra directories to search for salt modules
+A list of extra directories to search for Salt modules
 
 .. code-block:: yaml
 
@@ -200,7 +200,7 @@ A list of extra directories to search for salt modules
 
 Default: ``[]``
 
-A list of extra directories to search for salt returners
+A list of extra directories to search for Salt returners
 
 .. code-block:: yaml
 
@@ -214,7 +214,7 @@ A list of extra directories to search for salt returners
 
 Default: ``[]``
 
-A list of extra directories to search for salt states
+A list of extra directories to search for Salt states
 
 .. code-block:: yaml
 
@@ -229,7 +229,7 @@ A list of extra directories to search for salt states
 
 Default: ``[]``
 
-A list of extra directories to search for salt renderers
+A list of extra directories to search for Salt renderers
 
 .. code-block:: yaml
 
@@ -243,8 +243,8 @@ A list of extra directories to search for salt renderers
 
 Default: ``False``
 
-Set this value to true to enable auto loading and compiling of .pyx modules,
-This setting requires that gcc and cython are installed on the minion
+Set this value to true to enable auto-loading and compiling of ``.pyx`` modules,
+This setting requires that ``gcc`` and ``cython`` are installed on the minion
 
 .. code-block:: yaml
 
@@ -275,7 +275,7 @@ Default: ``False``
 
 state_verbose allows for the data returned from the minion to be more
 verbose. Normally only states that fail or states that have changes are
-returned, but setting state_verbose to True will return all states that
+returned, but setting state_verbose to ``True`` will return all states that
 were checked
 
 .. code-block:: yaml
@@ -291,7 +291,7 @@ Default: ``True``
 
 autoload_dynamic_modules Turns on automatic loading of modules found in the
 environments on the master. This is turned on by default, to turn of
-autoloading modules when states run set this value to False
+autoloading modules when states run set this value to ``False``
 
 .. code-block:: yaml
 
@@ -304,7 +304,7 @@ Default: ``True``
 clean_dynamic_modules keeps the dynamic modules on the minion in sync with
 the dynamic modules on the master, this means that if a dynamic module is
 not on the master it will be deleted from the minion. By default this is
-enabled and can be disabled by changing this value to False
+enabled and can be disabled by changing this value to ``False``
 
 .. code-block:: yaml
 
@@ -327,7 +327,7 @@ environments is to isolate via the top file.
     environment: None
 
 Security Settings
-------------------
+-----------------
 
 .. conf_minion:: open_mode
 
@@ -336,7 +336,7 @@ Security Settings
 
 Default: ``False``
 
-Open mode can be used to clean out the pki key received from the salt master,
+Open mode can be used to clean out the PKI key received from the Salt master,
 turn on open mode, restart the minion, then turn off open mode and restart the
 minion to clean the keys.
 
@@ -351,7 +351,7 @@ Thread Settings
 
 Default: ``True``
 
-Disable multiprocessing support, by default when a minion receives a
+Disable multiprocessing support by default when a minion receives a
 publication a new process is spawned and the command is executed therein.
 
 .. code-block:: yaml
@@ -396,7 +396,7 @@ One of 'info', 'quiet', 'critical', 'error', 'debug', 'warning'.
 Default: ``{}``
 
 Logger levels can be used to tweak specific loggers logging levels.
-Imagine you want to have the salt library at the 'warning' level, but, you
+Imagine you want to have the Salt library at the 'warning' level, but, you
 still wish to have 'salt.modules' at the 'debug' level:
 
 .. code-block:: yaml
@@ -404,3 +404,32 @@ still wish to have 'salt.modules' at the 'debug' level:
   log_granular_levels:
     'salt': 'warning',
     'salt.modules': 'debug'
+
+.. conf_minion:: include
+
+``include``
+-----------
+
+Default: ``not defined``
+
+The minion can include configuration from other files. To enable this,
+pass a list of paths to this option. The paths can be either relative or
+absolute; if relative, they are considered to be relative to the directory
+the main minion configuration file lives in. Paths can make use of 
+shell-style globbing. If no files are matched by a path passed to this
+option then the minion will log a warning message.
+
+.. code-block:: yaml
+    
+    # Include files from a minion.d directory in the same
+    # directory as the minion config file
+    include: minion.d/*
+
+    # Include a single extra file into the configuration
+    include: /etc/roles/webserver
+
+    # Include several files and the minion.d directory
+    include:
+      - extra_config
+      - minion.d/*
+      - /etc/roles/webserver

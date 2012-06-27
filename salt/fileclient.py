@@ -2,17 +2,13 @@
 Classes that manage file clients
 '''
 # Import python libs
-import BaseHTTPServer
 import contextlib
 import logging
 import hashlib
 import os
 import shutil
-import stat
 import string
 import subprocess
-import urllib2
-import urlparse
 
 # Import third-party libs
 import yaml
@@ -25,6 +21,9 @@ import salt.crypt
 import salt.loader
 import salt.utils
 import salt.payload
+import salt.utils.templates
+from salt._compat import (
+    URLError, HTTPError, BaseHTTPServer, urlparse, url_open)
 
 log = logging.getLogger(__name__)
 
@@ -89,11 +88,23 @@ class Client(object):
             path
             )
         destdir = os.path.dirname(dest)
-        cumask = os.umask(stat.S_IRWXG | stat.S_IRWXO)
+        cumask = os.umask(63)
         if not os.path.isdir(destdir):
             os.makedirs(destdir)
         yield dest
         os.umask(cumask)
+
+    def get_file(self, path, dest='', makedirs=False, env='base'):
+        '''
+        Copies a file from the local files or master depending on implementation
+        '''
+        raise NotImplementedError
+
+    def file_list_emptydirs(self, env='base'):
+        '''
+        List the empty dirs
+        '''
+        raise NotImplementedError
 
     def cache_file(self, path, env='base'):
         '''
@@ -121,7 +132,7 @@ class Client(object):
             ret.append(self.cache_file('salt://{0}'.format(path), env))
         return ret
 
-    def cache_dir(self, path, env='base'):
+    def cache_dir(self, path, env='base', include_empty=False):
         '''
         Download all of the files in a subdir of the master
         '''
@@ -133,6 +144,27 @@ class Client(object):
                 if not fn_.strip():
                     continue
                 ret.append(local)
+
+        if include_empty:
+            # Break up the path into a list containing the bottom-level directory
+            # (the one being recursively copied) and the directories preceding it
+            separated = string.rsplit(path,'/',1)
+            if len(separated) != 2:
+                # No slashes in path. (This means all files in env will be copied)
+                prefix = ''
+            else:
+                prefix = separated[0]
+            for fn_ in self.file_list_emptydirs(env):
+                if fn_.startswith(path):
+                    dest = os.path.normpath(
+                      os.sep.join([
+                      self.opts['cachedir'],
+                      'files',
+                      env])) 
+                    minion_dir = '%s/%s' % (dest,fn_)
+                    if not os.path.isdir(minion_dir):
+                        os.makedirs(minion_dir)
+                    ret.append(minion_dir)
         return ret
 
     def cache_local_file(self, path, **kwargs):
@@ -182,6 +214,21 @@ class Client(object):
 
         return ''
 
+    def list_states(self, env):
+        '''
+        Return a list of all available sls modules on the master for a given
+        environment
+        '''
+        states = []
+        for path in self.file_list(env):
+            if path.endswith('.sls'):
+                # is an sls module!
+                if path.endswith('{0}init.sls'.format(os.sep)):
+                    states.append(path.replace(os.sep, '.')[:-9])
+                else:
+                    states.append(path.replace(os.sep, '.')[:-4])
+        return states
+
     def get_state(self, sls, env):
         '''
         Get a state file from the master and store it in the local minion
@@ -206,7 +253,7 @@ class Client(object):
         path = string.rstrip(self._check_proto(path), '/')
         # Break up the path into a list containing the bottom-level directory
         # (the one being recursively copied) and the directories preceding it
-        separated = string.rsplit(path,'/',1)
+        separated = string.rsplit(path, '/', 1)
         if len(separated) != 2:
             # No slashes in path. (This means all files in env will be copied)
             prefix = ''
@@ -218,17 +265,17 @@ class Client(object):
             if fn_.startswith(path):
                 # Remove the leading directories from path to derive
                 # the relative path on the minion.
-                minion_relpath = string.lstrip(fn_[len(prefix):],'/')
+                minion_relpath = string.lstrip(fn_[len(prefix):], '/')
                 ret.append(self.get_file('salt://{0}'.format(fn_),
-                                         '%s/%s' % (dest,minion_relpath),
+                                         '%s/%s' % (dest, minion_relpath),
                                          True, env))
         # Replicate empty dirs from master
         for fn_ in self.file_list_emptydirs(env):
             if fn_.startswith(path):
                 # Remove the leading directories from path to derive
                 # the relative path on the minion.
-                minion_relpath = string.lstrip(fn_[len(prefix):],'/')
-                minion_mkdir = '%s/%s' % (dest,minion_relpath)
+                minion_relpath = string.lstrip(fn_[len(prefix):], '/')
+                minion_mkdir = '%s/%s' % (dest, minion_relpath)
                 os.makedirs(minion_mkdir)
                 ret.append(minion_mkdir)
         ret.sort()
@@ -238,7 +285,7 @@ class Client(object):
         '''
         Get a single file from a URL.
         '''
-        url_data = urlparse.urlparse(url)
+        url_data = urlparse(url)
         if url_data.scheme == 'salt':
             return self.get_file(url, dest, makedirs, env)
         if dest:
@@ -260,18 +307,69 @@ class Client(object):
             if not os.path.isdir(destdir):
                 os.makedirs(destdir)
         try:
-            with contextlib.closing(urllib2.urlopen(url)) as srcfp:
+            with contextlib.closing(url_open(url)) as srcfp:
                 with open(dest, 'wb') as destfp:
                     shutil.copyfileobj(srcfp, destfp)
             return dest
-        except urllib2.HTTPError, ex:
+        except HTTPError as ex:
             raise MinionError('HTTP error {0} reading {1}: {3}'.format(
                     ex.code,
                     url,
                     *BaseHTTPServer.BaseHTTPRequestHandler.responses[ex.code]))
-        except urllib2.URLError, ex:
+        except URLError as ex:
             raise MinionError('Error reading {0}: {1}'.format(url, ex.reason))
         return ''
+
+    def get_template(
+            self,
+            url,
+            dest,
+            template='jinja',
+            makedirs=False,
+            env='base',
+            **kwargs):
+        '''
+        Cache a file then process it as a template
+        '''
+        kwargs['env'] = env
+        url_data = urlparse(url)
+        sfn = self.cache_file(url, env)
+        if not os.path.exists(sfn):
+            return ''
+        if template in salt.utils.templates.template_registry:
+            data = salt.utils.templates.template_registry[template](
+                    sfn,
+                    **kwargs
+                    )
+        else:
+            log.error('Attempted to render template with unavailable engine '
+                      '{0}'.format(template))
+            salt.utils.safe_rm(data['data'])
+            return ''
+        if not data['result']:
+            # Failed to render the template
+            log.error('Failed to render template with error: {0}'.format(
+                data['data']
+                ))
+            return ''
+        if not dest:
+            # No destination passed, set the dest as an extrn_files cache
+            dest = os.path.normpath(
+                os.sep.join([
+                    self.opts['cachedir'],
+                    'extrn_files',
+                    env,
+                    url_data.netloc,
+                    url_data.path]))
+        destdir = os.path.dirname(dest)
+        if not os.path.isdir(destdir):
+            if makedirs:
+                os.makedirs(destdir)
+            else:
+                salt.utils.safe_rm(data['data'])
+                return ''
+        shutil.move(data['data'], dest)
+        return dest
 
 
 class LocalClient(Client):
@@ -420,7 +518,7 @@ class LocalClient(Client):
 
         if 'classes' in ndata:
             if isinstance(ndata['classes'], dict):
-                ret[env] = ndata['classes'].keys()
+                ret[env] = list(ndata['classes'])
             elif isinstance(ndata['classes'], list):
                 ret[env] = ndata['classes']
             else:
@@ -466,7 +564,7 @@ class RemoteClient(Client):
                     os.makedirs(destdir)
                 else:
                     return False
-            fn_ = open(dest, 'w+')
+            fn_ = open(dest, 'wb+')
         while True:
             if not fn_:
                 load['loc'] = 0
@@ -481,13 +579,13 @@ class RemoteClient(Client):
                     with self._cache_loc(data['dest'], env) as cache_dest:
                         dest = cache_dest
                         if not os.path.exists(cache_dest):
-                            with open(cache_dest, 'w+') as f:
+                            with open(cache_dest, 'wb+') as f:
                                 f.write(data['data'])
                 break
             if not fn_:
                 with self._cache_loc(data['dest'], env) as cache_dest:
                     dest = cache_dest
-                    fn_ = open(dest, 'w+')
+                    fn_ = open(dest, 'wb+')
             fn_.write(data['data'])
         if fn_:
             fn_.close()

@@ -1,8 +1,13 @@
 '''
 Support for APT (Advanced Packaging Tool)
 '''
-
+# Import python libs
 import os
+import re
+
+# Import Salt libs
+import salt.utils
+
 
 def __virtual__():
     '''
@@ -30,20 +35,26 @@ def __init__():
 
 def available_version(name):
     '''
-    The available version of the package in the repository
+    Return the latest version of the named package available for upgrade or
+    installation via the available apt repository
 
     CLI Example::
 
         salt '*' pkg.available_version <package name>
     '''
     version = ''
-    cmd = 'apt-cache -q show {0} | grep Version'.format(name)
+    cmd = 'apt-cache -q show {0} | grep ^Version'.format(name)
 
     out = __salt__['cmd.run_stdout'](cmd)
 
     version_list = out.split()
+    for comp in version_list:
+        if comp == 'Version:':
+            continue
+        return comp
+
     if len(version_list) >= 2:
-        version = version_list[1]
+        version = version_list[-1]
 
     return version
 
@@ -95,7 +106,7 @@ def refresh_db():
 
 
 def install(pkg, refresh=False, repo='', skip_verify=False,
-            debconf=None, **kwargs):
+            debconf=None, version=None, **kwargs):
     '''
     Install the passed package
 
@@ -111,6 +122,8 @@ def install(pkg, refresh=False, repo='', skip_verify=False,
     debconf : None
         Provide the path to a debconf answers file, processed before
         installation.
+    version : None
+        Install a specific version of the package, e.g. 1.0.9~ubuntu
 
     Return a dict containing the new package names and versions::
 
@@ -121,6 +134,7 @@ def install(pkg, refresh=False, repo='', skip_verify=False,
 
         salt '*' pkg.install <package name>
     '''
+    salt.utils.daemonize_if(__opts__, **kwargs)
     if refresh:
         refresh_db()
 
@@ -129,6 +143,11 @@ def install(pkg, refresh=False, repo='', skip_verify=False,
 
     ret_pkgs = {}
     old_pkgs = list_pkgs()
+
+    if version:
+        pkg = "{0}={1}".format(pkg, version)
+    elif 'eq' in kwargs:
+        pkg = "{0}={1}".format(pkg, kwargs['eq'])
 
     cmd = 'apt-get -q -y {confold}{verify}{target} install {pkg}'.format(
             confold=' -o DPkg::Options::=--force-confold',
@@ -203,7 +222,7 @@ def purge(pkg):
     return ret_pkgs
 
 
-def upgrade(refresh=True):
+def upgrade(refresh=True, **kwargs):
     '''
     Upgrades all packages via ``apt-get dist-upgrade``
 
@@ -221,7 +240,7 @@ def upgrade(refresh=True):
 
         salt '*' pkg.upgrade
     '''
-
+    salt.utils.daemonize_if(__opts__, **kwargs)
     if refresh:
         refresh_db()
 
@@ -262,19 +281,19 @@ def list_pkgs(regex_string=""):
         salt '*' pkg.list_pkgs httpd
     '''
     ret = {}
-    cmd = 'dpkg --list {0}'.format(regex_string)
+    cmd = 'dpkg-query --showformat=\'${{Status}} ${{Package}} ${{Version}}\n\' -W {0}'.format(regex_string)
 
     out = __salt__['cmd.run_stdout'](cmd)
 
     for line in out.split('\n'):
         cols = line.split()
-        if len(cols) and 'ii' in cols[0]:
-            ret[cols[1]] = cols[2]
+        if len(cols) and 'install' in cols[0] and 'installed' in cols[2]:
+            ret[cols[3]] = cols[4]
 
     # If ret is empty at this point, check to see if the package is virtual.
     # We also need aptitude past this point.
     if not ret and __salt__['cmd.has_exec']('aptitude'):
-        cmd = ('aptitude search "{0} ?virtual ?reverse-provides(?installed)"'
+        cmd = ('aptitude search "?name(^{0}$) ?virtual ?reverse-provides(?installed)"'
                 .format(regex_string))
 
         out = __salt__['cmd.run_stdout'](cmd)
@@ -284,9 +303,49 @@ def list_pkgs(regex_string=""):
 
     return ret
 
+def _get_upgradable():
+    '''
+    Utility function to get upgradable packages
+
+    Sample return data:
+    { 'pkgname': '1.2.3-45', ... }
+    '''
+
+    cmd = 'apt-get --just-print dist-upgrade'
+    out = __salt__['cmd.run_stdout'](cmd)
+
+    # rexp parses lines that look like the following:
+    ## Conf libxfont1 (1:1.4.5-1 Debian:testing [i386])
+    rexp = re.compile('(?m)^Conf '
+                      '([^ ]+) ' # Package name
+                      '\(([^ ]+) ' # Version
+                      '([^ ]+) ' # Release
+                      '\[([^\]]+)\]\)$') # Arch
+    keys = ['name', 'version', 'release', 'arch']
+    _get = lambda l, k: l[keys.index(k)]
+
+    upgrades = rexp.findall(out)
+
+    r = {}
+    for line in upgrades:
+        name = _get(line, 'name')
+        version = _get(line, 'version')
+        r[name] = version
+
+    return r
+
+def list_upgrades():
+    '''
+    List all available package upgrades.
+
+    CLI Example::
+
+        salt '*' pkg.list_upgrades
+    '''
+    r = _get_upgradable()
+    return r
 
 def upgrade_available(name):
-
     '''
     Check whether or not an upgrade is available for a given package
 
@@ -294,19 +353,5 @@ def upgrade_available(name):
 
         salt '*' pkg.upgrade_available <package name>
     '''
-    cmd = 'apt-get --just-print upgrade'
-    out = __salt__['cmd.run_stdout'](cmd)
-
-    # Mini filter function
-    def _to_update(line):
-        return line.startswith("Conf ")
-
-    upgraded_packages = filter(_to_update, out.split('\n'))
-
-    # Example line:
-    # 'Conf linux-image-2.6.35-32-generic (2.6.35-32.66 Ubuntu:10.10/maverick-updates [amd64])'
-    for line in upgraded_packages:
-        data = line.split()
-        if name == data[1]:
-            return True
-    return False
+    r = name in _get_upgradable()
+    return r

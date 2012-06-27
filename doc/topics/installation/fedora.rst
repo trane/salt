@@ -3,20 +3,25 @@ Fedora & CentOS / Enterprise Linux
 ==================================
 
 Beginning with version 0.9.4, Salt has been available in the primary Fedora
-repositories and is available for installation using yum. Fedora will have more
+repositories and `EPEL`_. It is installable using yum. Fedora will have more
 up to date versions of Salt than other members of the Red Hat family, which
 makes it a great place to help improve Salt!
 
-.. admonition:: CentOS/EL 5
+.. admonition:: CentOS / RHEL 5
 
-    We are still working to get msgpack packaged for Python 2.6 so Salt is not
-    yet (but nearly) in EPEL 5. In the meantime you can install Salt via our
-    Fedora People repository:
+    Salt and all dependencies have been *finally* accepted into the yum
+    reposities for EPEL5 and EPEL6. Currently, the latest is in epel-testing
+    while awaiting promotion to epel proper. You can install it via:
 
     .. code-block:: bash
 
-        wget -O /etc/yum.repos.d/epel-salt.repo \\
-            http://repos.fedorapeople.org/repos/herlo/salt/epel-salt.repo
+        yum --enablerepo=epel-testing install salt
+
+    On RHEL6, the proper jinja packages were moved from EPEL to the
+    "RHEL Server Optional Channel". Verify this repository is enabled before
+    installing salt on RHEL6.
+
+.. _`EPEL`: http://fedoraproject.org/wiki/EPEL
 
 Installation
 ============
@@ -39,8 +44,7 @@ means you're going to want one master and a whole bunch of minions!
 Configuration
 =============
 
-In the sections below I'll outline configuration options for both the Salt
-Master and Salt Minions.
+Below, we'll cover Salt Master and Minion configuration options.
 
 Master Configuration
 ====================
@@ -52,7 +56,7 @@ configuration paths.
 
 **Interface**
 
-By default the Salt master listens on ports 4505 and 4506 on all interfaces
+By default the Salt master listens on TCP ports ``4505`` and ``4506`` on all interfaces
 (0.0.0.0). If you have a need to bind Salt to a specific IP, redefine the
 "interface" directive as seen here:
 
@@ -63,7 +67,7 @@ By default the Salt master listens on ports 4505 and 4506 on all interfaces
 
 **Enable the Master**
 
-You'll also likely want to activate the Salt Master in systemd, configuring the
+You'll also likely want to activate the Salt Master in *systemd*, configuring the
 Salt Master to start automatically at boot.
 
 .. code-block:: bash
@@ -121,9 +125,8 @@ that option through systemd.
 
 **Start the Minion**
 
-Once you've completed all of these steps you're ready to start your Salt
-Minion. You should be able to start your Salt Minion now using the command
-here:
+Once you've completed all of these steps, start the Minion. This command
+should do the trick:
 
 .. code-block:: bash
 
@@ -134,7 +137,7 @@ see if anything was missed. Salt doesn't take much configuration (part of its
 beauty!), and errors are usually simple mistakes.
 
 Tying It All Together
-======================
+=====================
 
 If you've successfully completed each of the steps above you should have a
 running Salt Master and a running Salt Minion. The Minion should be configured
@@ -200,7 +203,7 @@ the ``test.ping`` remote command:
    {'alpha': True}
 
 Where Do I Go From Here
-========================
+=======================
 
 Congratulations! You've successfully configured your first Salt Minions and are
 able to send remote commands. I'm sure you're eager to learn more about what

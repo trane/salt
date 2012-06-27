@@ -4,11 +4,15 @@ encrypted keys to general payload dynamics and packaging, these happen
 in here
 '''
 
-import cPickle as pickle
+from salt._compat import pickle
 
 try:
     # Attempt to import msgpack
     import msgpack
+    # There is a serialization issue on ARM and potentially other platforms
+    # for some msgpack bindings, check for it
+    if msgpack.loads(msgpack.dumps([1,2,3])) is None:
+        raise ImportError
 except ImportError:
     # Fall back to msgpack_pure
     import msgpack_pure as msgpack
@@ -41,6 +45,7 @@ def format_payload(enc, **kwargs):
     payload['load'] = load
     return package(payload)
 
+
 class Serial(object):
     '''
     Create a serialization object, this object manages all message
@@ -59,7 +64,7 @@ class Serial(object):
         elif self.serial == 'pickle':
             try:
                 return pickle.loads(msg)
-            except:
+            except Exception:
                 return msgpack.loads(msg, use_list=True)
 
     def load(self, fn_):
@@ -67,6 +72,7 @@ class Serial(object):
         Run the correct serialization to load a file
         '''
         data = fn_.read()
+        fn_.close()
         return self.loads(data)
 
     def dumps(self, msg):
@@ -83,3 +89,4 @@ class Serial(object):
         Serialize the correct data into the named file object
         '''
         fn_.write(self.dumps(msg))
+        fn_.close()

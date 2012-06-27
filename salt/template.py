@@ -1,7 +1,12 @@
-import os.path
+'''
+Manage basic template commands
+'''
+import time
+import os
 import tempfile
 
 import salt.utils
+from salt._compat import string_types
 
 
 def compile_template(template, renderers, default, env='', sls=''):
@@ -10,7 +15,7 @@ def compile_template(template, renderers, default, env='', sls=''):
     derived from the template.
     '''
     # Template was specified incorrectly
-    if not isinstance(template, basestring):
+    if not isinstance(template, string_types):
         return {}
     # Template does not exists
     if not os.path.isfile(template):
@@ -22,8 +27,16 @@ def compile_template(template, renderers, default, env='', sls=''):
     with open(template) as f:
         if not f.read().strip():
             return {}
-    return renderers[
+    ret = renderers[
         template_shebang(template, renderers, default)](template, env, sls)
+    if ret is None:
+        # The file is empty or is being written elsewhere
+        time.sleep(0.01)
+        ret = renderers[
+            template_shebang(template, renderers, default)](template, env, sls)
+        if ret is None:
+            ret = {}
+    return ret
 
 
 def compile_template_str(template, renderers, default):
@@ -31,7 +44,8 @@ def compile_template_str(template, renderers, default):
     Take the path to a template and return the high data structure
     derived from the template.
     '''
-    fn_ = tempfile.mkstemp()[1]
+    fd_, fn_ = tempfile.mkstemp()
+    os.close(fd_)
     with open(fn_, 'w+') as f:
         f.write(template)
     high = renderers[template_shebang(fn_, renderers, default)](fn_)

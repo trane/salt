@@ -21,7 +21,7 @@ environment variables ``SALT_MASTER_CONFIG`` and ``SALT_MINION_CONFIG``.
 Using the Salt Command
 ======================
 
-The Salt command needs a few components to send information to the salt
+The Salt command needs a few components to send information to the Salt
 minions. The target minions need to be defined, the function to call and any
 arguments the function requires.
 
@@ -148,8 +148,8 @@ be retried from the minions via the :func:`sys.doc` function:
 Compound Command Execution
 --------------------------
 
-If a series of commands need to be sent to a single target specification then
-the multiple commands can be send in a single publish. This can make gathering
+If a series of commands needs to be sent to a single target specification then
+the commands can be sent in a single publish. This can make gathering
 groups of information faster, and lowers the stress on the network for repeated
 commands.
 

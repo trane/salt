@@ -10,6 +10,7 @@ import copy
 import salt.client
 import salt.output
 
+
 class Batch(object):
     '''
     Manage the execution of batch runs
@@ -38,6 +39,8 @@ class Batch(object):
             args.append('grain_pcre')
         elif self.opts['exsel']:
             args.append('exsel')
+        elif self.opts['pillar']:
+            args.append('pillar')
         elif self.opts['nodegroup']:
             args.append('nodegroup')
         elif self.opts['compound']:
@@ -48,7 +51,7 @@ class Batch(object):
         fret = []
         for ret in self.local.cmd_iter(*args):
             for minion in ret:
-                print '{0} Detected for this batch run'.format(minion)
+                print('{0} Detected for this batch run'.format(minion))
                 fret.append(minion)
         return sorted(fret)
 
@@ -67,8 +70,8 @@ class Batch(object):
             else:
                 return int(self.opts['batch'])
         except ValueError:
-            print ('Invalid batch data sent: {0}\nData must be in the form'
-                   'of %10, 10% or 3').format(self.opts['batch'])
+            print(('Invalid batch data sent: {0}\nData must be in the form'
+                   'of %10, 10% or 3').format(self.opts['batch']))
 
     def run(self):
         '''
@@ -99,7 +102,7 @@ class Batch(object):
             active += next_
             args[0] = next_
             if next_:
-                print '\nExecuting run on {0}\n'.format(next_)
+                print('\nExecuting run on {0}\n'.format(next_))
                 iters.append(
                         self.local.cmd_iter_no_block(*args))
             else:
@@ -110,7 +113,7 @@ class Batch(object):
                     # Gather returns until we get to the bottom
                     ncnt = 0
                     while True:
-                        part = queue.next()
+                        part = next(queue)
                         if part is None:
                             time.sleep(0.01)
                             ncnt += 1

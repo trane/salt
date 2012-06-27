@@ -12,6 +12,7 @@ import logging
 
 # Import Salt libs
 import salt.payload
+from salt._compat import string_types
 
 log = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ def _sync(form, env):
     '''
     Sync the given directory in the given environment
     '''
-    if isinstance(env, basestring):
+    if isinstance(env, string_types):
         env = env.split(',')
     ret = []
     remote = set()
@@ -162,7 +163,7 @@ def refresh_pillar():
         return True
     except IOError:
         return False
-    
+
 
 def running():
     '''
@@ -182,6 +183,9 @@ def running():
     for fn_ in os.listdir(proc_dir):
         path = os.path.join(proc_dir, fn_)
         data = serial.loads(open(path, 'rb').read())
+        if not isinstance(data, dict):
+            # Invalid serial object
+            continue
         if not procs.get(str(data['pid'])):
             # The process is no longer running, clear out the file and
             # continue

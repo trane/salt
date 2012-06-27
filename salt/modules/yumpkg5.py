@@ -4,7 +4,6 @@ Support for YUM
 import logging
 from collections import namedtuple
 
-from salt.exceptions import PkgParseError
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +110,19 @@ def list_pkgs():
     '''
     out = _parse_yum('list installed')
     return dict([(i.name, i.version) for i in out])
+
+
+def list_upgrades():
+    '''
+    Check whether or not an upgrade is available for all packages
+
+    CLI Example::
+
+        salt '*' pkg.list_upgrades
+    '''
+    out = _parse_yum('check-update')
+    return dict([(i.name, i.version) for i in out])
+
 
 def refresh_db():
     '''

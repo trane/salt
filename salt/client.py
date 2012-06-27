@@ -33,7 +33,6 @@ import re
 import sys
 import glob
 import time
-import datetime
 import getpass
 
 # Import zmq modules
@@ -42,32 +41,29 @@ import zmq
 # Import salt modules
 import salt.config
 import salt.payload
+import salt.utils
+import salt.utils.event
 from salt.exceptions import SaltClientError, SaltInvocationError
 
 # Try to import range from https://github.com/ytoolshed/range
 RANGE = False
 try:
-  import seco.range
-  RANGE = True
+    import seco.range
+    RANGE = True
 except ImportError:
-  pass
+    pass
 
 
-def prep_jid(cachedir):
+def condition_kwarg(arg, kwarg):
     '''
-    Parses the job return directory, generates a job id and sets up the
-    job id directory.
+    Return a single arg structure for the publisher to safely use
     '''
-    jid_root = os.path.join(cachedir, 'jobs')
-    jid = datetime.datetime.strftime(
-        datetime.datetime.now(), '%Y%m%d%H%M%S%f'
-    )
-    jid_dir = os.path.join(jid_root, jid)
-    if not os.path.isdir(jid_dir):
-        os.makedirs(jid_dir)
-    else:
-        return prep_jid(cachedir)
-    return jid
+    if isinstance(kwarg, dict):
+        kw_ = []
+        for key, val in kwarg.items():
+            kw_.append('{0}={1}'.format(key, val))
+        return list(arg) + kw_
+    return arg
 
 
 class LocalClient(object):
@@ -79,6 +75,7 @@ class LocalClient(object):
         self.serial = salt.payload.Serial(self.opts)
         self.key = self.__read_master_key()
         self.salt_user = self.__get_user()
+        self.event = salt.utils.event.MasterEvent(self.opts['sock_dir'])
 
     def __read_master_key(self):
         '''
@@ -108,7 +105,7 @@ class LocalClient(object):
         # If the running user is just the specified user in the
         # conf file, don't pass the user as it's implied.
         elif user == self.opts['user']:
-          return None
+            return None
         return user
 
     def _check_glob_minions(self, expr):
@@ -161,10 +158,10 @@ class LocalClient(object):
     def _convert_range_to_list(self, tgt):
         range = seco.range.Range(self.opts['range_server'])
         try:
-          return range.expand(tgt)
-        except seco.range.RangeException, e:
-          print "Range server exception: %s" % e
-          return []
+            return range.expand(tgt)
+        except seco.range.RangeException as e:
+            print(("Range server exception: {0}".format(e)))
+            return []
 
     def gather_job_info(self, jid, tgt, tgt_type):
         '''
@@ -184,13 +181,18 @@ class LocalClient(object):
         arg=(),
         timeout=None,
         expr_form='glob',
-        ret=''):
+        ret='',
+        kwarg=None):
         '''
         Execute a salt command and return.
         '''
+        arg = condition_kwarg(arg, kwarg)
         if timeout is None:
             timeout = self.opts['timeout']
-        jid = prep_jid(self.opts['cachedir'])
+        jid = salt.utils.prep_jid(
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         pub_data = self.pub(
             tgt,
             fun,
@@ -202,6 +204,8 @@ class LocalClient(object):
         if pub_data['jid'] == '0':
             # Failed to connect to the master and send the pub
             return {}
+        elif not pub_data['jid']:
+            return {}
         return self.get_returns(pub_data['jid'], pub_data['minions'], timeout)
 
     def cmd_cli(
@@ -212,13 +216,19 @@ class LocalClient(object):
         timeout=None,
         expr_form='glob',
         ret='',
-        verbose=False):
+        verbose=False,
+        kwarg=None):
         '''
-        Execute a salt command and return
+        Execute a salt command and return data conditioned for command line
+        output
         '''
+        arg = condition_kwarg(arg, kwarg)
         if timeout is None:
             timeout = self.opts['timeout']
-        jid = prep_jid(self.opts['cachedir'])
+        jid = salt.utils.prep_jid(
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         pub_data = self.pub(
             tgt,
             fun,
@@ -228,10 +238,13 @@ class LocalClient(object):
             jid=jid,
             timeout=timeout)
         if pub_data['jid'] == '0':
-            print 'Failed to connect to the Master, is the Salt Master running?'
+            print('Failed to connect to the Master, is the Salt Master running?')
+            yield {}
+        elif not pub_data['jid']:
+            print('No minions match the target')
             yield {}
         else:
-            for fn_ret in self.get_cli_returns(pub_data['jid'],
+            for fn_ret in self.get_cli_event_returns(pub_data['jid'],
                     pub_data['minions'],
                     timeout,
                     tgt,
@@ -248,13 +261,19 @@ class LocalClient(object):
         arg=(),
         timeout=None,
         expr_form='glob',
-        ret=''):
+        ret='',
+        kwarg=None):
         '''
-        Execute a salt command and return
+        Execute a salt command and return an iterator to return data as it is
+        received
         '''
+        arg = condition_kwarg(arg, kwarg)
         if timeout is None:
             timeout = self.opts['timeout']
-        jid = prep_jid(self.opts['cachedir'])
+        jid = salt.utils.prep_jid(
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         pub_data = self.pub(
             tgt,
             fun,
@@ -265,6 +284,8 @@ class LocalClient(object):
             timeout=timeout)
         if pub_data['jid'] == '0':
             # Failed to connect to the master and send the pub
+            yield {}
+        elif not pub_data['jid']:
             yield {}
         else:
             for fn_ret in self.get_iter_returns(pub_data['jid'],
@@ -281,13 +302,18 @@ class LocalClient(object):
         arg=(),
         timeout=None,
         expr_form='glob',
-        ret=''):
+        ret='',
+        kwarg=None):
         '''
         Execute a salt command and return
         '''
+        arg = condition_kwarg(arg, kwarg)
         if timeout is None:
             timeout = self.opts['timeout']
-        jid = prep_jid(self.opts['cachedir'])
+        jid = salt.utils.prep_jid(
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         pub_data = self.pub(
             tgt,
             fun,
@@ -298,6 +324,8 @@ class LocalClient(object):
             timeout=timeout)
         if pub_data['jid'] == '0':
             # Failed to connect to the master and send the pub
+            yield {}
+        elif not pub_data['jid']:
             yield {}
         else:
             for fn_ret in self.get_iter_returns(pub_data['jid'],
@@ -312,13 +340,18 @@ class LocalClient(object):
         arg=(),
         timeout=None,
         expr_form='glob',
-        ret=''):
+        ret='',
+        kwarg=None):
         '''
         Execute a salt command and return
         '''
+        arg = condition_kwarg(arg, kwarg)
         if timeout is None:
             timeout = self.opts['timeout']
-        jid = prep_jid(self.opts['cachedir'])
+        jid = salt.utils.prep_jid(
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         pub_data = self.pub(
             tgt,
             fun,
@@ -330,7 +363,9 @@ class LocalClient(object):
         if pub_data['jid'] == '0':
             # Failed to connect to the master and send the pub
             return {}
-        return (self.get_returns(pub_data['jid'],
+        elif not pub_data['jid']:
+            return {}
+        return (self.get_full_returns(pub_data['jid'],
                 pub_data['minions'], timeout))
 
     def get_cli_returns(
@@ -346,13 +381,17 @@ class LocalClient(object):
         a specified jid, it returns all of the information for the jid
         '''
         if verbose:
-            print 'Executing job with jid {0}'.format(jid)
-            print '------------------------------------\n'
+            print('Executing job with jid {0}'.format(jid))
+            print('------------------------------------\n')
         if timeout is None:
             timeout = self.opts['timeout']
         fret = {}
         inc_timeout = timeout
-        jid_dir = os.path.join(self.opts['cachedir'], 'jobs', jid)
+        jid_dir = salt.utils.jid_dir(
+                jid,
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         start = int(time.time())
         found = set()
         wtag = os.path.join(jid_dir, 'wtag*')
@@ -372,11 +411,18 @@ class LocalClient(object):
                         continue
                     while fn_ not in ret:
                         try:
+                            check = True
                             ret_data = self.serial.load(open(retp, 'r'))
+                            if ret_data is None:
+                                # Sometimes the ret data is read at the wrong
+                                # time and returns None, do a quick re-read
+                                if check:
+                                    check = False
+                                    continue
                             ret[fn_] = {'ret': ret_data}
                             if os.path.isfile(outp):
                                 ret[fn_]['out'] = self.serial.load(open(outp, 'r'))
-                        except:
+                        except Exception:
                             pass
                     found.add(fn_)
                     fret.update(ret)
@@ -396,11 +442,18 @@ class LocalClient(object):
                 for id_ in jinfo:
                     if jinfo[id_]:
                         if verbose:
-                            print 'Execution is still running on {0}'.format(id_)
+                            print('Execution is still running on {0}'.format(id_))
                         more_time = True
                 if more_time:
                     timeout += inc_timeout
                     continue
+                if verbose:
+                    if tgt_type == 'glob' or tgt_type == 'pcre':
+                        if not len(fret) >= len(minions):
+                            print('\nThe following minions did not return:')
+                            fail = sorted(list(minions.difference(found)))
+                            for minion in fail:
+                                print(minion)
                 break
             time.sleep(0.01)
 
@@ -411,7 +464,11 @@ class LocalClient(object):
         '''
         if timeout is None:
             timeout = self.opts['timeout']
-        jid_dir = os.path.join(self.opts['cachedir'], 'jobs', jid)
+        jid_dir = salt.utils.jid_dir(
+                jid,
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         start = 999999999999
         gstart = int(time.time())
         found = set()
@@ -436,7 +493,7 @@ class LocalClient(object):
                             ret[fn_] = {'ret': ret_data}
                             if os.path.isfile(outp):
                                 ret[fn_]['out'] = self.serial.load(open(outp, 'r'))
-                        except:
+                        except Exception:
                             pass
                     found.add(fn_)
                     yield ret
@@ -464,7 +521,11 @@ class LocalClient(object):
         '''
         if timeout is None:
             timeout = self.opts['timeout']
-        jid_dir = os.path.join(self.opts['cachedir'], 'jobs', jid)
+        jid_dir = salt.utils.jid_dir(
+                jid,
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         start = 999999999999
         gstart = int(time.time())
         ret = {}
@@ -487,7 +548,7 @@ class LocalClient(object):
                     while fn_ not in ret:
                         try:
                             ret[fn_] = self.serial.load(open(retp, 'r'))
-                        except:
+                        except Exception:
                             pass
             if ret and start == 999999999999:
                 start = int(time.time())
@@ -514,7 +575,11 @@ class LocalClient(object):
         '''
         if timeout is None:
             timeout = self.opts['timeout']
-        jid_dir = os.path.join(self.opts['cachedir'], 'jobs', jid)
+        jid_dir = salt.utils.jid_dir(
+                jid,
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
         start = 999999999999
         gstart = int(time.time())
         ret = {}
@@ -538,7 +603,7 @@ class LocalClient(object):
                             ret[fn_] = {'ret': ret_data}
                             if os.path.isfile(outp):
                                 ret[fn_]['out'] = self.serial.load(open(outp, 'r'))
-                        except:
+                        except Exception:
                             pass
             if ret and start == 999999999999:
                 start = int(time.time())
@@ -556,6 +621,107 @@ class LocalClient(object):
                 return ret
             time.sleep(0.02)
 
+    def get_cli_event_returns(
+            self,
+            jid,
+            minions,
+            timeout=None,
+            tgt='*',
+            tgt_type='glob',
+            verbose=False):
+        '''
+        Get the returns for the command line interface via the event system
+        '''
+        if verbose:
+            print('Executing job with jid {0}'.format(jid))
+            print('------------------------------------\n')
+        if timeout is None:
+            timeout = self.opts['timeout']
+        inc_timeout = timeout
+        jid_dir = salt.utils.jid_dir(
+                jid,
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
+        start = int(time.time())
+        found = set()
+        wtag = os.path.join(jid_dir, 'wtag*')
+        # Check to see if the jid is real, if not return the empty dict
+        if not os.path.isdir(jid_dir):
+            yield {}
+        # Wait for the hosts to check in
+        while True:
+            raw = self.event.get_event(timeout, jid)
+            if not raw is None:
+                found.add(raw['id'])
+                ret = {raw['id']: {'ret': raw['return']}}
+                if 'out' in raw:
+                    ret[raw['id']]['out'] = raw['out']
+                yield ret
+                continue
+            # Then event system timeout was reached and nothing was returned
+            if len(found) >= len(minions):
+                # All minions have returned, break out of the loop
+                break
+            if glob.glob(wtag) and not int(time.time()) > start + timeout + 1:
+                # The timeout +1 has not been reached and there is still a
+                # write tag for the syndic
+                continue
+            if int(time.time()) > start + timeout:
+                # The timeout has been reached, check the jid to see if the
+                # timeout needs to be increased
+                jinfo = self.gather_job_info(jid, tgt, tgt_type)
+                more_time = False
+                for id_ in jinfo:
+                    if jinfo[id_]:
+                        if verbose:
+                            print('Execution is still running on {0}'.format(id_))
+                        more_time = True
+                if more_time:
+                    timeout += inc_timeout
+                    continue
+                if verbose:
+                    if tgt_type == 'glob' or tgt_type == 'pcre':
+                        if not len(found) >= len(minions):
+                            print('\nThe following minions did not return:')
+                            fail = sorted(list(minions.difference(found)))
+                            for minion in fail:
+                                print(minion)
+                break
+            time.sleep(0.01)
+
+    def get_event_iter_returns(self, jid, minions, timeout=None):
+        '''
+        Gather the return data from the event system, break hard when timeout
+        is reached.
+        '''
+        if timeout is None:
+            timeout = self.opts['timeout']
+        jid_dir = salt.utils.jid_dir(
+                jid,
+                self.opts['cachedir'],
+                self.opts['hash_type']
+                )
+        start = 999999999999
+        gstart = int(time.time())
+        found = set()
+        # Check to see if the jid is real, if not return the empty dict
+        if not os.path.isdir(jid_dir):
+            yield {}
+        # Wait for the hosts to check in
+        while True:
+            raw = self.event.get_event(timeout)
+            if raw is None:
+                # Timeout reached
+                break
+            found.add(raw['id'])
+            ret = {raw['id']: {'ret': raw['return']}}
+            if 'out' in raw:
+                ret[raw['id']]['out'] = raw['out']
+            yield ret
+            time.sleep(0.02)
+
+
     def find_cmd(self, cmd):
         '''
         Hunt through the old salt calls for when cmd was run, return a dict:
@@ -564,7 +730,11 @@ class LocalClient(object):
         job_dir = os.path.join(self.opts['cachedir'], 'jobs')
         ret = {}
         for jid in os.listdir(job_dir):
-            jid_dir = os.path.join(job_dir, jid)
+            jid_dir = salt.utils.jid_dir(
+                    jid,
+                    self.opts['cachedir'],
+                    self.opts['hash_type']
+                    )
             loadp = os.path.join(jid_dir, '.load.p')
             if os.path.isfile(loadp):
                 try:
@@ -578,7 +748,7 @@ class LocalClient(object):
                             if not os.path.isfile(retp):
                                 continue
                             ret[jid][host] = self.serial.load(open(retp))
-                except:
+                except Exception:
                     continue
             else:
                 continue
@@ -597,6 +767,7 @@ class LocalClient(object):
                 'grain': self._check_grain_minions,
                 'grain_pcre': self._check_grain_minions,
                 'exsel': self._check_grain_minions,
+                'pillar': self._check_grain_minions,
                 'compound': self._check_grain_minions,
                 }[expr_form](expr)
 
@@ -623,6 +794,15 @@ class LocalClient(object):
             minions:
                 A set, the targets that the tgt passed should match.
         '''
+        # Make sure the publisher is running by checking the unix socket
+        if not os.path.exists(
+                os.path.join(
+                    self.opts['sock_dir'],
+                    'publish_pull.ipc'
+                    )
+                ):
+            return {'jid': '0', 'minions': []}
+
         if expr_form == 'nodegroup':
             if tgt not in self.opts['nodegroups']:
                 conf_file = self.opts.get('conf_file', 'the master config file')
@@ -634,8 +814,8 @@ class LocalClient(object):
         # Convert a range expression to a list of nodes and change expression
         # form to list
         if expr_form == 'range' and RANGE:
-          tgt = self._convert_range_to_list(tgt)
-          expr_form = 'list'
+            tgt = self._convert_range_to_list(tgt)
+            expr_form = 'list'
 
         # Run a check_minions, if no minions match return False
         # format the payload - make a function that does this in the payload
@@ -646,19 +826,25 @@ class LocalClient(object):
         # return what we get back
         minions = self.check_minions(tgt, expr_form)
 
-        if not minions:
-            return {'jid': '',
+        if self.opts['order_masters']:
+            # If we're a master of masters, ignore the check_minion and
+            # set the minions to the target.  This speeds up wait time
+            # for lists and ranges and makes regex and other expression
+            # forms possible
+            minions = tgt
+        elif not minions:
+            return {'jid': '0',
                     'minions': minions}
 
         # Generate the standard keyword args to feed to format_payload
-        payload_kwargs = { 'cmd': 'publish',
+        payload_kwargs = {'cmd': 'publish',
                            'tgt': tgt,
                            'fun': fun,
                            'arg': arg,
                            'key': self.key,
                            'tgt_type': expr_form,
                            'ret': ret,
-                           'jid': jid }
+                           'jid': jid}
 
         # If we have a salt user, add it to the payload
         if self.salt_user:
@@ -668,7 +854,7 @@ class LocalClient(object):
         if self.opts['order_masters']:
             payload_kwargs['to'] = timeout
 
-        package = salt.payload.format_payload( 'clear', **payload_kwargs)
+        package = salt.payload.format_payload('clear', **payload_kwargs)
 
         # Prep zmq
         context = zmq.Context()
@@ -680,19 +866,7 @@ class LocalClient(object):
                     )
                 )
         socket.send(package)
-        payload = None
-        for ind in range(100):
-            try:
-                payload = self.serial.loads(
-                        socket.recv(
-                            zmq.NOBLOCK
-                            )
-                        )
-                break
-            except zmq.core.error.ZMQError:
-                time.sleep(0.01)
-        if not payload:
-            return {'jid': '0', 'minions': []}
+        payload = self.serial.loads(socket.recv())
         return {'jid': payload['load']['jid'],
                 'minions': minions}
 
@@ -744,3 +918,20 @@ class FunctionWrapper(dict):
             for _key, _val in kwargs:
                 args.append('{0}={1}'.format(_key, _val))
             return self.local.cmd(self.minion, key, args)
+
+class Caller(object):
+    '''
+    Create an object used to call salt functions directly on a minion
+    '''
+    def __init__(self, c_path='/etc/salt/minion'):
+        self.opts = salt.config.minion_config(c_path)
+        self.sminion = salt.minion.SMinion(self.opts)
+
+    def function(self, fun, *args, **kwargs):
+        '''
+        Call a single salt function
+        '''
+        func = self.sminion.functions[fun]
+        args, kw = salt.minion.detect_kwargs(func, args, kwargs)
+        return func(*args, **kw)
+

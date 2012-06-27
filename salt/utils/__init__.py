@@ -1,16 +1,23 @@
 '''
 Some of the utils used by salt
 '''
+from __future__ import absolute_import
 
+# Import Python libs
 import os
 import imp
+import random
 import sys
 import socket
 import logging
+import hashlib
+import datetime
 from calendar import month_abbr as months
 
+# Import Salt libs
+import salt.minion
+import salt.payload
 from salt.exceptions import SaltClientError, CommandNotFoundError
-
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +42,16 @@ WHITE = '\033[1;37m'
 DEFAULT_COLOR = '\033[00m'
 RED_BOLD = '\033[01;31m'
 ENDC = '\033[0m'
+
+
+def safe_rm(tgt):
+    '''
+    Safely remove a file
+    '''
+    try:
+        os.remove(tgt)
+    except (IOError, OSError):
+        pass
 
 
 def is_empty(filename):
@@ -75,7 +92,7 @@ def get_colors(use=True):
             'ENDC': '\033[0m',
             }
 
-    if not use:
+    if not use or not os.isatty(sys.stdout.fileno()):
         for color in colors:
             colors[color] = ''
 
@@ -99,18 +116,18 @@ def daemonize():
                     executablepath,
                     os.path.join(pypath[0], os.sep, pypath[1], 'Lib\\site-packages\\salt\\utils\\saltminionservice.py'),
                     os.path.join(pypath[0], os.sep, pypath[1]),
-                    0 )
+                    0)
                 sys.exit(0)
             else:
-                import saltminionservice
+                from . import saltminionservice
                 import win32serviceutil
                 import win32service
                 import winerror
                 servicename = 'salt-minion'
                 try:
                     status = win32serviceutil.QueryServiceStatus(servicename)
-                except win32service.error, details:
-                    if details[0]==winerror.ERROR_SERVICE_DOES_NOT_EXIST:
+                except win32service.error as details:
+                    if details[0] == winerror.ERROR_SERVICE_DOES_NOT_EXIST:
                         saltminionservice.instart(saltminionservice.MinionService, servicename, 'Salt Minion')
                         sys.exit(0)
                 if status[1] == win32service.SERVICE_RUNNING:
@@ -132,7 +149,7 @@ def daemonize():
     # decouple from parent environment
     os.chdir("/")
     os.setsid()
-    os.umask(022)
+    os.umask(18)
 
     # do second fork
     try:
@@ -148,6 +165,32 @@ def daemonize():
     os.dup2(dev_null.fileno(), sys.stdin.fileno())
     os.dup2(dev_null.fileno(), sys.stdout.fileno())
     os.dup2(dev_null.fileno(), sys.stderr.fileno())
+
+
+def daemonize_if(opts, **kwargs):
+    '''
+    Daemonize a module function process if multiprocessing is True and the
+    process is not being called by salt-call
+    '''
+    if 'salt-call' in sys.argv[0]:
+        return
+    if not opts['multiprocessing']:
+        return
+    # Daemonizing breaks the proc dir, so the proc needs to be rewritten
+    data = {}
+    for key, val in kwargs.items():
+        if key.startswith('__pub_'):
+            data[key[6:]] = val
+    if not 'jid' in data:
+        return
+    serial = salt.payload.Serial(opts)
+    proc_dir = salt.minion.get_proc_dir(opts['cachedir'])
+    fn_ = os.path.join(proc_dir, data['jid'])
+    daemonize()
+    sdata = {'pid': os.getpid()}
+    sdata.update(data)
+    with open(fn_, 'w+') as f:
+        f.write(serial.dumps(sdata))
 
 
 def profile_func(filename=None):
@@ -185,6 +228,19 @@ def which(exe=None):
             if os.access(full_path, os.X_OK):
                 return full_path
     return None
+
+
+def which_bin(exes):
+    '''
+    Scan over some possible executables and return the first one that is found
+    '''
+    if not isinstance(exes, (list, tuple)):
+        return None
+    for exe in exes:
+        path = which(exe)
+        if not path:
+            continue
+        return path
 
 
 def list_files(directory):
@@ -233,7 +289,8 @@ def gen_mac(prefix='52:54:'):
     '''
     Generates a mac addr with the defined prefix
     '''
-    src = ['1','2','3','4','5','6','7','8','9','0','a','b','c','d','e','f']
+    src = ['1', '2', '3', '4', '5', '6', '7', '8',
+            '9', '0', 'a', 'b', 'c', 'd', 'e', 'f']
     mac = prefix
     while len(mac) < 18:
         if len(mac) < 3:
@@ -279,7 +336,7 @@ def required_module_list(docstring=None):
     ret = []
     txt = 'Required python modules: '
     data = docstring.split('\n') if docstring else []
-    mod_list =  filter(lambda x: x.startswith(txt), data)
+    mod_list = list(x for x in data if x.startswith(txt))
     if not mod_list:
         return []
     modules = mod_list[0].replace(txt, '').split(', ')
@@ -302,6 +359,31 @@ def required_modules_error(name, docstring):
     filename = os.path.basename(name).split('.')[0]
     msg = '\'{0}\' requires these python modules: {1}'
     return msg.format(filename, ', '.join(modules))
+
+
+def prep_jid(cachedir, sum_type):
+    '''
+    Return a job id and prepare the job id directory
+    '''
+    jid = "{0:%Y%m%d%H%M%S%f}".format(datetime.datetime.now())
+
+    jid_dir_ = jid_dir(jid, cachedir, sum_type)
+    if not os.path.isdir(jid_dir_):
+        os.makedirs(jid_dir_)
+        with open(os.path.join(jid_dir_, 'jid'), 'w+') as fn_:
+            fn_.write(jid)
+    else:
+        return prep_jid(cachedir, sum_type)
+    return jid
+
+
+def jid_dir(jid, cachedir, sum_type):
+    '''
+    Return the jid_dir for the given job id
+    '''
+    jhash = getattr(hashlib, sum_type)(jid).hexdigest()
+    return os.path.join(cachedir, 'jobs', jhash[:2], jhash[2:])
+
 
 def check_or_die(command):
     '''

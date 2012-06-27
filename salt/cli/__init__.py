@@ -105,6 +105,15 @@ class SaltCMD(object):
                 action='store_true',
                 help=('Instead of using shell globs use the return code '
                       'of a function.'))
+        parser.add_option('-I',
+                '--pillar',
+                default=False,
+                dest='pillar',
+                action='store_true',
+                help=('Instead of using shell globs to evaluate the target '
+                      'use a pillar value to identify targets, the syntax '
+                      'for the target is the pillar key followed by a glob'
+                      'expression:\n"role:production*"'))
         parser.add_option('-N',
                 '--nodegroup',
                 default=False,
@@ -215,6 +224,7 @@ class SaltCMD(object):
             else:
                 opts['tgt'] = args[0]
 
+            # Detect compound command and set up the data for it
             if ',' in args[1]:
                 opts['fun'] = args[1].split(',')
                 opts['arg'] = []
@@ -238,10 +248,8 @@ class SaltCMD(object):
         try:
             local = salt.client.LocalClient(self.opts['conf_file'])
         except SaltClientError as exc:
-            local = None
-            ret = exc
-            out = ''
-            self._output_ret(ret, out)
+            sys.stderr.write('{0}\n'.format(exc))
+            sys.exit(2)
             return
 
         if 'query' in self.opts:
@@ -261,9 +269,9 @@ class SaltCMD(object):
                     else:
                         printout = get_outputter(None)
 
-                    print 'Return data for job {0}:'.format(jid)
+                    print('Return data for job {0}:'.format(jid))
                     printout(ret[jid])
-                    print ''
+                    print('')
         elif self.opts['batch']:
             batch = salt.cli.batch.Batch(self.opts)
             batch.run()
@@ -285,6 +293,8 @@ class SaltCMD(object):
                 args.append('grain_pcre')
             elif self.opts['exsel']:
                 args.append('exsel')
+            elif self.opts['pillar']:
+                args.append('pillar')
             elif self.opts['nodegroup']:
                 args.append('nodegroup')
             elif self.opts['range']:
@@ -304,6 +314,13 @@ class SaltCMD(object):
                     if self.opts['static']:
                         full_ret = local.cmd_full_return(*args)
                         ret, out = self._format_ret(full_ret)
+                        self._output_ret(ret, out)
+                    elif self.opts['fun'] == 'sys.doc':
+                        ret = {}
+                        out = ''
+                        for full_ret in local.cmd_cli(*args):
+                            ret_, out = self._format_ret(full_ret)
+                            ret.update(ret_)
                         self._output_ret(ret, out)
                     else:
                         if self.opts['verbose']:
@@ -369,9 +386,9 @@ class SaltCMD(object):
                     if ret[host][fun]:
                         docs[fun] = ret[host][fun]
         for fun in sorted(docs):
-            print fun + ':'
-            print docs[fun]
-            print ''
+            print(fun + ':')
+            print(docs[fun])
+            print('')
 
 
 class SaltCP(object):
@@ -385,7 +402,8 @@ class SaltCP(object):
         '''
         Parse the command line
         '''
-        parser = optparse.OptionParser(version="%%prog %s" % VERSION)
+        usage = "%prog [options] '<target>' SOURCE DEST"
+        parser = optparse.OptionParser(version="%%prog %s" % VERSION, usage=usage)
 
         parser.add_option('-t',
                 '--timeout',
@@ -495,16 +513,19 @@ class SaltKey(object):
         parser.add_option('-l',
                 '--list',
                 dest='list',
-                default=False,
-                action='store_true',
-                help='List the unaccepted public keys')
+                default='',
+                help=('List the public keys. Takes the args: '
+                      '"pre", "un", "unaccepted": Unaccepted/unsigned keys '
+                      '"acc", "accepted": Accepted/signed keys '
+                      '"rej", "rejected": Rejected keys '
+                      '"all": all keys'))
 
         parser.add_option('-L',
                 '--list-all',
                 dest='list_all',
                 default=False,
                 action='store_true',
-                help='List all public keys')
+                help='List all public keys.  Deprecated: use "--list all"')
 
         parser.add_option('-a',
                 '--accept',
@@ -595,6 +616,32 @@ class SaltKey(object):
                 dest='conf_file',
                 default='/etc/salt/master',
                 help='Pass in an alternative configuration file')
+        
+        parser.add_option('--raw-out',
+                default=False,
+                action='store_true',
+                dest='raw_out',
+                help=('Print the output from the salt-key command in raw python '
+                      'form, this is suitable for re-reading the output into '
+                      'an executing python script with eval.'))
+
+        parser.add_option('--yaml-out',
+                default=False,
+                action='store_true',
+                dest='yaml_out',
+                help='Print the output from the salt-key command in yaml.')
+
+        parser.add_option('--json-out',
+                default=False,
+                action='store_true',
+                dest='json_out',
+                help='Print the output from the salt-key command in json.')
+
+        parser.add_option('--no-color',
+                default=False,
+                action='store_true',
+                dest='no_color',
+                help='Disable all colored output')
 
         options, args = parser.parse_args()
 
@@ -618,6 +665,13 @@ class SaltKey(object):
         '''
         Execute saltkey
         '''
+        verify_env([
+            os.path.join(self.opts['pki_dir'], 'minions'),
+            os.path.join(self.opts['pki_dir'], 'minions_pre'),
+            os.path.join(self.opts['pki_dir'], 'minions_rejected'),
+            os.path.dirname(self.opts['log_file']),
+            ],
+            self.opts['user'])
         import salt.log
         salt.log.setup_logfile_logger(self.opts['key_logfile'],
                                       self.opts['loglevel'])
@@ -637,7 +691,10 @@ class SaltCall(object):
         Parse the command line arguments
         '''
         usage = "%prog [options] <function> [arguments]"
-        parser = optparse.OptionParser(version='%%prog %s'.format(VERSION), usage=usage)
+        parser = optparse.OptionParser(
+                version='salt-call {0}'.format(VERSION),
+                usage=usage
+                )
 
         parser.add_option('-g',
                 '--grains',
@@ -721,7 +778,8 @@ class SaltCall(object):
         verify_env([opts['pki_dir'],
                     opts['cachedir'],
                     os.path.dirname(opts['log_file']),
-                    ])
+                    ],
+                    opts['user'])
 
         return opts
 
@@ -733,7 +791,6 @@ class SaltCall(object):
         salt.log.setup_console_logger(
             self.opts['log_level']
         )
-        import logging
         caller = salt.cli.caller.Caller(self.opts)
         caller.run()
 

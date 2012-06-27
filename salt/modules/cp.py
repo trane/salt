@@ -40,23 +40,43 @@ def recv(files, dest):
 def get_file(path, dest, env='base'):
     '''
     Used to get a single file from the salt master
-    
+
     CLI Example::
 
         salt '*' cp.get_file salt://path/to/file /minion/dest
     '''
-    if not hash_file(path,env):
+    if not hash_file(path, env):
         return ''
     else:
         client = salt.fileclient.get_file_client(__opts__)
         return client.get_file(path, dest, False, env)
 
 
+def get_template(path, dest, template='jinja', env='base', **kwargs):
+    '''
+    Render a file as a template before setting it down
+
+    CLI Example::
+
+        salt '*' cp.get_template salt://path/to/template /minion/dest
+    '''
+    client = salt.fileclient.get_file_client(__opts__)
+    if not 'salt' in kwargs:
+        kwargs['salt'] = __salt__
+    if not 'pillar' in kwargs:
+        kwargs['pillar'] = __pillar__
+    if not 'grains' in kwargs:
+        kwargs['grains'] = __grains__
+    if not 'opts' in kwargs:
+        kwargs['opts'] = __opts__
+    return client.get_template(path, dest, template, False, env, **kwargs)
+
+
 def get_dir(path, dest, env='base'):
     '''
     Used to recursively copy a directory from the salt master
 
-    CLI Example:
+    CLI Example::
 
         salt '*' cp.get_dir salt://path/to/dir/ /minion/dest
     '''
@@ -103,16 +123,16 @@ def cache_files(paths, env='base'):
     return client.cache_files(paths, env)
 
 
-def cache_dir(path, env='base'):
+def cache_dir(path, env='base', include_empty=False):
     '''
     Download and cache everything under a directory from the master
 
     CLI Example::
-    
+
         salt '*' cp.cache_dir salt://path/to/dir
     '''
     client = salt.fileclient.get_file_client(__opts__)
-    return client.cache_dir(path, env)
+    return client.cache_dir(path, env, include_empty)
 
 
 def cache_master(env='base'):
@@ -151,6 +171,18 @@ def cache_local_file(path):
     # The file hasn't been cached or has changed; cache it
     client = salt.fileclient.get_file_client(__opts__)
     return client.cache_local_file(path)
+
+
+def list_states(env='base'):
+    '''
+    List all of the available state modules in an environment
+
+    CLI Example::
+
+        salt '*' cp.list_states
+    '''
+    client = salt.fileclient.get_file_client(__opts__)
+    return client.list_states(env)
 
 
 def list_master(env='base'):

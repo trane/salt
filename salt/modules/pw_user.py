@@ -1,10 +1,15 @@
 '''
 Manage users with the useradd command
 '''
+try:
+    import grp
+    import pwd
+except ImportError:
+    pass
 
-import grp
 import os
-import pwd
+
+from salt._compat import string_types
 
 
 def __virtual__():
@@ -20,6 +25,7 @@ def add(name,
         groups=None,
         home=True,
         shell=None,
+        system=False,
         **kwargs):
     '''
     Add a user to the minion
@@ -28,7 +34,7 @@ def add(name,
 
         salt '*' user.add name <uid> <gid> <groups> <home> <shell>
     '''
-    if isinstance(groups, basestring):
+    if isinstance(groups, string_types):
         groups = groups.split(',')
     cmd = 'pw useradd '
     if shell:
@@ -43,7 +49,7 @@ def add(name,
         if home is True:
             cmd += '-m '
         else:
-            cmd += '-m -b {0} '.format(os.dirname(home))
+            cmd += '-m -b {0} '.format(os.path.dirname(home))
     cmd += '-n {0}'.format(name)
     ret = __salt__['cmd.run_all'](cmd)
 
@@ -171,7 +177,7 @@ def chgroups(name, groups, append=False):
 
         salt '*' user.chgroups foo wheel,root True
     '''
-    if isinstance(groups, basestring):
+    if isinstance(groups, string_types):
         groups = groups.split(',')
     ugrps = set(list_groups(name))
     if ugrps == set(groups):
@@ -210,7 +216,7 @@ def list_groups(name):
 
     CLI Example::
 
-        salt '*' user.groups foo
+        salt '*' user.list_groups foo
     '''
     ugrp = set()
     for group in grp.getgrall():
